@@ -1,11 +1,11 @@
 <mujoco model="go2">
   <compiler angle="radian" meshdir="assets" autolimits="true"/>
 
-  <!-- <option cone="elliptic" impratio="100"/> -->
+  <option cone="elliptic" impratio="100"/>
 
-    <option cone="pyramidal" impratio="100" iterations="1" ls_iterations="5">
+    <!-- <option cone="pyramidal" impratio="100" iterations="1" ls_iterations="5">
     <flag eulerdamp="disable"/>
-  </option>
+  </option> -->
 
 
   <default>

@@ -57,7 +57,7 @@ def get_config():
                         # tracking_lin_vel=1.5,
                         tracking_lin_vel=1.5,
                         # Track the angular velocity along z-axis, i.e. yaw rate.
-                        tracking_ang_vel=0.8/2.,
+                        tracking_ang_vel=.5,
                         # Below are regularization terms, we roughly divide the
                         # terms to base state regularizations, joint
                         # regularizations, and other behavior regularizations.
@@ -66,7 +66,7 @@ def get_config():
                         # Penalize the base roll and pitch rate. L2 penalty.
                         ang_vel_xy=-0.05,
                         # Penalize non-zero roll and pitch angles. L2 penalty.
-                        orientation=-5.0,
+                        orientation=-5.0/2.,
                         # L2 regularization of joint torques, |tau|^2.
                         torques=-0.00001,
                         # Penalize the change in the action and encourage smooth
@@ -74,7 +74,7 @@ def get_config():
                         action_rate=-0.01,
                         # Encourage long swing steps.  However, it does not
                         # encourage high clearances.
-                        feet_air_time=2 * 0.2,
+                        feet_air_time=0.1,
                         # Encourage no motion at zero command, L2 regularization
                         # |q - q_default|^2.
                         stand_still=-0.5,
@@ -83,11 +83,11 @@ def get_config():
                         # Penalizing foot slipping on the ground.
                         foot_slip=-0.1,
                         # reward the z position of the foot if it is not in contact
-                        #foot_clearance=0.0,
+                        foot_clearance=0.0,
                         # reward having two-foot on air.
                         # two_feet_air=0.0,  # should be positive.
                         # height of the base
-                        #tracking_z=0.0,  # should be positive
+                        tracking_z=0.0,  # should be positive
                     )
                 ),
                 # Tracking reward = exp(-error^2/sigma).
@@ -113,16 +113,16 @@ class Go2Env(PipelineEnv):
     def __init__(
         self,
         obs_noise: float = 0.05,
-        action_scale: float = 0.3,
+        action_scale: float = 0.5,
         kick_vel: float = 0.05,
         scene_file: str = "../Go2Py/assets/mujoco/go2.xml",
         air_time_bias: float = 0.1,
-        mu_v: float = 0.1,
+        mu_v: float = 0.5,
         Fs: float = 0.3,
         temperature: float = 0.1,
         timestep: float = 0.004,
         kp: float = 35,
-        kd: float = 2.5,
+        kd: float = 2.,
         max_torque: float = 24,
         min_torque: float = -24,
         randomize_custom_params: bool = False,
@@ -185,10 +185,12 @@ class Go2Env(PipelineEnv):
         self.uppers = jp.array([1, 3.4, -0.83] * 4)
 
         feet_site = [
-            "FL_foot",  # 'foot_front_left',
-            "RL_foot",  # 'foot_hind_left',
+           
+           
             "FR_foot",  #  'foot_front_right',
+             "FL_foot",  # 'foot_front_left',
             "RR_foot",  # 'foot_hind_right',
+             "RL_foot",  # 'foot_hind_left',
         ]
         feet_site_id = [
             mujoco.mj_name2id(sys.mj_model, mujoco.mjtObj.mjOBJ_SITE.value, f)
@@ -199,10 +201,12 @@ class Go2Env(PipelineEnv):
         # continue here!!
         self._feet_site_id = np.array(feet_site_id)
         lower_leg_body = [
+             "FR_calf",  #'lower_leg_front_right',
             "FL_calf",  # 'lower_leg_front_left',
-            "RL_calf",  #'lower_leg_hind_left',
-            "FR_calf",  #'lower_leg_front_right',
             "RR_calf",  #  'lower_leg_hind_right',
+            "RL_calf",  #'lower_leg_hind_left',
+           
+            
         ]
         lower_leg_body_id = [
             mujoco.mj_name2id(sys.mj_model, mujoco.mjtObj.mjOBJ_BODY.value, l)
@@ -255,17 +259,19 @@ class Go2Env(PipelineEnv):
         }
 
         if self.randomize_custom_params:
-            state_info["p_mu_v"] = jax.random.uniform(rng, minval=0, maxval=0.5)
+            #state_info["p_mu_v"] = jax.random.uniform(rng, minval=0, maxval=0.5)
 
             #state_info["p_Fs"] = jax.random.uniform(rng, minval=0, maxval=3.0)
-            state_info["p_Fs"] = jax.random.uniform(rng, minval=0., maxval=0.)
+            #state_info["p_Fs"] = jax.random.uniform(rng, minval=0., maxval=.2)
 
 
             state_info["p_temperature"] = jax.random.uniform(
-                rng, minval=0.05, maxval=0.15
+                rng, minval=0.08, maxval=0.12
             )
-            # state_info["p_kp"] = jax.random.uniform(rng, minval=18., maxval=22.)
-            # state_info["p_kd"] = jax.random.uniform(rng, minval=0.05, maxval=0.2)
+            state_info["p_kp"] = jax.random.uniform(rng, minval=20., maxval=25.)
+            state_info["p_kd"] = jax.random.uniform(rng, minval=.5, maxval=1.)
+            state_info["p_Fs"] = jax.random.uniform(rng, minval=0., maxval=3.)
+
 
             #
             # state_info["p_mu_v"] = jp.clip(state_info["p_mu_v"], 0.01, 1e6)
@@ -309,8 +315,14 @@ class Go2Env(PipelineEnv):
             tau_sticktion = Fs * jp.tanh(dq / temperature)
             tau_viscose = mu_v * dq
             tau = kp * (action - q) - kd * dq  
-            #- tau_viscose - tau_sticktion
-            tau = jp.clip(tau, self.min_torque, self.max_torque)
+            tau += -tau_viscose - tau_sticktion
+
+            # tau_sticktion = .1 * jp.tanh(dq / .1)
+            # tau_viscose = 1. * dq
+            # tau = 20 * (action - q) - .5 * dq  
+            # tau -= tau_viscose 
+            # tau -= tau_sticktion
+            tau = jp.clip(tau, -24., +24.)
             return (
                 self._pipeline.step(self.sys, state, tau, self._debug),
                 None,
@@ -405,13 +417,13 @@ class Go2Env(PipelineEnv):
             "foot_slip": self._reward_foot_slip(pipeline_state, contact_filt_cm),
             "termination": self._reward_termination(done, state.info["step"]),
             # TODO: check
-            # "foot_clearance": self._reward_foot_clearance(
-            #     pipeline_state, contact_filt_cm
-            # ),
+            "foot_clearance": self._reward_foot_clearance(
+                pipeline_state, contact_filt_cm
+            ),
             # "two_feet_air": self._reward_two_feet_air(
             #     state.info["command"], contact_filt_cm
             # ), TODO: fix issue with 
-            # "tracking_z": self._reward_tracking_z(x),
+             "tracking_z": self._reward_tracking_z(x),
         }
         rewards = {
             k: v * self.reward_config.rewards.scales[k] for k, v in rewards.items()
@@ -570,14 +582,14 @@ class Go2Env(PipelineEnv):
         # TODO: check!!!
         pos = pipeline_state.site_xpos[self._feet_site_id]  # feet position
         z_pos = pos[:, 2]
-        no_contact = ~contact_filt
-        return jp.sum(z_pos * no_contact)
+        #no_contact = ~contact_filt
+        return jp.sum(z_pos)
 
     def _reward_two_feet_air(self, commands: jax.Array, contact_filt_cm: jax.Array):
         feet = jp.ones(4)
         num_feet = jp.sum(feet * contact_filt_cm)
         dif = -1 * jp.abs(num_feet - 2)  # 0, 1 , 2
-        dif *= math.safe_norm(commands[:2])[1] > 0.05  # no reward for zero command
+        dif *= math.safe_norm(commands[:2]) > 0.05  # no reward for zero command
         return dif
 
     def _reward_termination(self, done: jax.Array, step: jax.Array) -> jax.Array:
