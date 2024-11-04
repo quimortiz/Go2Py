@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y -qq --no-install-recommends \
                                       build-essential \
                                       cmake \
                                       git \
+                                      ffmpeg \
                                       && rm -rf /var/lib/apt/lists/*
                                       
 RUN curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash
@@ -40,10 +41,15 @@ RUN pip3 install matplotlib opencv-python proxsuite
 RUN pip3 install isort black
 RUN pip3 install warp-lang scikit-learn casadi mujoco pin
 
+# TODO: unify between pip and pip3
 RUN pip install jupyter ipykernel
 RUN pip install cyclonedds pygame 
 RUN pip install pynput pygame 
 RUN pip install onnx onnxruntime
+RUN pip install "jax[cuda12]"
+RUN pip install brax
+RUN pip install mediapy
+
 
 # Set environmental variables required for using ROS 
 RUN echo 'source /opt/ros/humble/setup.bash' >> ~/.bashrc
