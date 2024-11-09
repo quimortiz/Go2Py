@@ -57,7 +57,7 @@ def get_config():
                         # tracking_lin_vel=1.5,
                         tracking_lin_vel=1.5,
                         # Track the angular velocity along z-axis, i.e. yaw rate.
-                        tracking_ang_vel=.5,
+                        tracking_ang_vel=0.5,
                         # Below are regularization terms, we roughly divide the
                         # terms to base state regularizations, joint
                         # regularizations, and other behavior regularizations.
@@ -66,7 +66,7 @@ def get_config():
                         # Penalize the base roll and pitch rate. L2 penalty.
                         ang_vel_xy=-0.05,
                         # Penalize non-zero roll and pitch angles. L2 penalty.
-                        orientation=-5.0/2.,
+                        orientation=-5.0 / 2.0,
                         # L2 regularization of joint torques, |tau|^2.
                         torques=-0.00001,
                         # Penalize the change in the action and encourage smooth
@@ -87,13 +87,16 @@ def get_config():
                         # reward having two-foot on air.
                         # two_feet_air=0.0,  # should be positive.
                         # height of the base
+                        # tracking_z=2*2*10*0.1,  # should be positive
+                        # diagonal_contact=5 * 0.1,  # Add this line
                         tracking_z=0.0,  # should be positive
+                        diagonal_contact=0.0,  # Add this line
                     )
                 ),
                 # Tracking reward = exp(-error^2/sigma).
                 tracking_sigma=0.25,
-                tracking_z_sigma=.1,
-            
+                tracking_z_sigma=0.1 / 2.0,
+                diagonal_contact_sigma=0.25,
             )
         )
         return default_config
@@ -122,11 +125,11 @@ class Go2Env(PipelineEnv):
         temperature: float = 0.1,
         timestep: float = 0.004,
         kp: float = 35,
-        kd: float = 2.,
+        kd: float = 2.0,
         max_torque: float = 24,
         min_torque: float = -24,
         randomize_custom_params: bool = False,
-        target_base_z: float = 0.32,
+        target_base_z: float = 0.37,
         **kwargs,
     ):
         self.target_base_z = target_base_z
@@ -140,6 +143,11 @@ class Go2Env(PipelineEnv):
         sys = mjcf.load(scene_file)
         self._dt = 0.02  # this environment is 50 fps
         sys = sys.tree_replace({"opt.timestep": self.timestep})
+        # sys.opt.cone = "pyramidal"
+        # sys.opt.impratio = 100
+        # sys.opt.iterations = 1
+        # sys.opt.ls_iterations = 5
+
         # print("sys.act_size")
         # print(sys.act_size())
         self.air_time_bias = air_time_bias
@@ -185,12 +193,10 @@ class Go2Env(PipelineEnv):
         self.uppers = jp.array([1, 3.4, -0.83] * 4)
 
         feet_site = [
-           
-           
             "FR_foot",  #  'foot_front_right',
-             "FL_foot",  # 'foot_front_left',
+            "FL_foot",  # 'foot_front_left',
             "RR_foot",  # 'foot_hind_right',
-             "RL_foot",  # 'foot_hind_left',
+            "RL_foot",  # 'foot_hind_left',
         ]
         feet_site_id = [
             mujoco.mj_name2id(sys.mj_model, mujoco.mjtObj.mjOBJ_SITE.value, f)
@@ -201,12 +207,10 @@ class Go2Env(PipelineEnv):
         # continue here!!
         self._feet_site_id = np.array(feet_site_id)
         lower_leg_body = [
-             "FR_calf",  #'lower_leg_front_right',
+            "FR_calf",  #'lower_leg_front_right',
             "FL_calf",  # 'lower_leg_front_left',
             "RR_calf",  #  'lower_leg_hind_right',
             "RL_calf",  #'lower_leg_hind_left',
-           
-            
         ]
         lower_leg_body_id = [
             mujoco.mj_name2id(sys.mj_model, mujoco.mjtObj.mjOBJ_BODY.value, l)
@@ -217,23 +221,26 @@ class Go2Env(PipelineEnv):
         # self._foot_radius = 0.0175
         self._foot_radius = 0.022
         self._nv = sys.nv
+        self.len_obs_history = 5
+        self.obs_size = 33
+        self.prob_cmd_0 = 0.05
+        # todo: add other modes when we only to x rotation, y rotation or yaw rotation.
 
     def sample_command(self, rng: jax.Array) -> jax.Array:
-        lin_vel_x = [-0.6, 1.5]  # min max [m/s]
-        lin_vel_y = [-0.8, 0.8]  # min max [m/s]
-        ang_vel_yaw = [-0.7, 0.7]  # min max [rad/s]
 
-        _, key1, key2, key3 = jax.random.split(rng, 4)
-        lin_vel_x = jax.random.uniform(
-            key1, (1,), minval=lin_vel_x[0], maxval=lin_vel_x[1]
-        )
-        lin_vel_y = jax.random.uniform(
-            key2, (1,), minval=lin_vel_y[0], maxval=lin_vel_y[1]
-        )
-        ang_vel_yaw = jax.random.uniform(
-            key3, (1,), minval=ang_vel_yaw[0], maxval=ang_vel_yaw[1]
-        )
-        new_cmd = jp.array([lin_vel_x[0], lin_vel_y[0], ang_vel_yaw[0]])
+        _, key1, key2, key3, key4 = jax.random.split(rng, 5)
+        u = jax.random.uniform(key4)
+
+        def case_true(_):
+            return jp.array([0.0, 0.0, 0.0])
+
+        def case_false(_):
+            lin_vel_x = jax.random.uniform(key1, (1,), minval=-0.6, maxval=1.5)
+            lin_vel_y = jax.random.uniform(key2, (1,), minval=-0.8, maxval=0.8)
+            ang_vel_yaw = jax.random.uniform(key3, (1,), minval=-0.7, maxval=0.7)
+            return jp.array([lin_vel_x[0], lin_vel_y[0], ang_vel_yaw[0]])
+
+        new_cmd = jax.lax.cond(u < self.prob_cmd_0, case_true, case_false, operand=None)
         return new_cmd
 
     def reset(self, rng: jax.Array) -> State:  # pytype: disable=signature-mismatch
@@ -259,20 +266,19 @@ class Go2Env(PipelineEnv):
         }
 
         if self.randomize_custom_params:
-            #state_info["p_mu_v"] = jax.random.uniform(rng, minval=0, maxval=0.5)
+            # state_info["p_mu_v"] = jax.random.uniform(rng, minval=0, maxval=0.5)
 
-            #state_info["p_Fs"] = jax.random.uniform(rng, minval=0, maxval=3.0)
-            #state_info["p_Fs"] = jax.random.uniform(rng, minval=0., maxval=.2)
-
+            # state_info["p_Fs"] = jax.random.uniform(rng, minval=0, maxval=3.0)
+            # state_info["p_Fs"] = jax.random.uniform(rng, minval=0., maxval=.2)
 
             state_info["p_temperature"] = jax.random.uniform(
                 rng, minval=0.08, maxval=0.12
             )
-            state_info["p_kp"] = jax.random.uniform(rng, minval=20., maxval=25.)
-            state_info["p_kd"] = jax.random.uniform(rng, minval=.5, maxval=1.)
-            state_info["p_Fs"] = jax.random.uniform(rng, minval=0., maxval=3.)
-
-
+            state_info["p_kp"] = jax.random.uniform(rng, minval=20.0, maxval=22.0)
+            state_info["p_kd"] = jax.random.uniform(rng, minval=0.5, maxval=0.7)
+            #state_info["p_Fs"] = jax.random.uniform(rng, minval=0.0, maxval=0.2)
+            state_info["p_Fs"] = jax.random.uniform(rng, minval=0.0, maxval=3.)
+            
             #
             # state_info["p_mu_v"] = jp.clip(state_info["p_mu_v"], 0.01, 1e6)
             # state_info["p_Fs"] = jp.clip(state_info["p_Fs"], 0.01, 1e6)
@@ -282,19 +288,27 @@ class Go2Env(PipelineEnv):
             # state_info["p_kd"] = jp.clip(state_info["p_kd"], 0.01, 1e6)
             # state_info["p_kp"] = jp.clip(state_info["p_kp"], 0.05, 1e6)
 
-        obs = jp.zeros(15 * 31)  # store 15 steps of history
+        obs = jp.zeros(
+            self.len_obs_history * self.obs_size
+        )  # store 15 steps of history
 
         # repeat the same observation for the history
         # current_obs = obs[:31]
 
-        for _ in range(15):
+        for _ in range(self.len_obs_history):
             obs = self._get_obs(pipeline_state, state_info, obs)
             # obs = jp.roll(obs_history, obs.size).at[: current_obs.size].set(current_obs)
+        # jax.debug.print("obs = {}", obs)
+        # jax.debug.print("obs shape = {}", obs.shape)
 
         reward, done = jp.zeros(2)
         metrics = {"total_dist": 0.0}
         for k in state_info["rewards"]:
             metrics[k] = state_info["rewards"][k]
+
+        # jax.debug.print("obs = {}", obs)
+        # jax.debug.print("obs shape = {}", obs.shape)
+
         state = State(
             pipeline_state, obs, reward, done, metrics, state_info
         )  # pytype: disable=wrong-arg-types
@@ -314,15 +328,15 @@ class Go2Env(PipelineEnv):
             dq = state.qd[6:]
             tau_sticktion = Fs * jp.tanh(dq / temperature)
             tau_viscose = mu_v * dq
-            tau = kp * (action - q) - kd * dq  
+            tau = kp * (action - q) - kd * dq
             tau += -tau_viscose - tau_sticktion
 
             # tau_sticktion = .1 * jp.tanh(dq / .1)
             # tau_viscose = 1. * dq
-            # tau = 20 * (action - q) - .5 * dq  
-            # tau -= tau_viscose 
+            # tau = 20 * (action - q) - .5 * dq
+            # tau -= tau_viscose
             # tau -= tau_sticktion
-            tau = jp.clip(tau, -24., +24.)
+            tau = jp.clip(tau, -24.0, +24.0)
             return (
                 self._pipeline.step(self.sys, state, tau, self._debug),
                 None,
@@ -420,15 +434,21 @@ class Go2Env(PipelineEnv):
             "foot_clearance": self._reward_foot_clearance(
                 pipeline_state, contact_filt_cm
             ),
+            "diagonal_contact": self._reward_diagonal_contact(
+                contact_filt_cm, state.info["command"]
+            ),
             # "two_feet_air": self._reward_two_feet_air(
             #     state.info["command"], contact_filt_cm
-            # ), TODO: fix issue with 
-             "tracking_z": self._reward_tracking_z(x),
+            # ), TODO: fix issue with
+            "tracking_z": self._reward_tracking_z(x),
         }
         rewards = {
             k: v * self.reward_config.rewards.scales[k] for k, v in rewards.items()
         }
-        reward = jp.clip(sum(rewards.values()) * self.dt, 0.0, 10000.0)
+        # reward = jp.clip(
+        #     sum(rewards.values()) * self.dt, 0.0, 10000.0
+        # )  # why is reward clipped?
+        reward = jp.clip(sum(rewards.values()) * self.dt, -1.0, 1.0)
 
         # state management
         state.info["kick"] = kick
@@ -476,7 +496,7 @@ class Go2Env(PipelineEnv):
 
         obs = jp.concatenate(
             [
-                jp.array([local_rpyrate[2]]) * 0.25,  # yaw rate
+                local_rpyrate * 0.25,  # yaw rate
                 math.rotate(jp.array([0, 0, -1]), inv_torso_rot),  # projected gravity
                 state_info["command"] * jp.array([2.0, 2.0, 0.25]),  # command
                 pipeline_state.q[7:] - self._default_pose,  # motor angles
@@ -490,8 +510,42 @@ class Go2Env(PipelineEnv):
         )
         # stack observations through time
         obs = jp.roll(obs_history, obs.size).at[: obs.size].set(obs)
+        # jax.debug.print("obs = {}", obs)
+        # jax.debug.print("obs shape = {}", obs.shape)
 
         return obs
+
+    def _reward_diagonal_contact(
+        self, contact: jax.Array, commands: jax.Array
+    ) -> jax.Array:
+        """Reward for having diagonal legs in contact simultaneously without 2D tensors."""
+        contact_f = contact.astype(jp.float32)
+        # Desired patterns for diagonal contacts
+        # notes: Front and Right are exchanged.
+        # Pattern 1: FL and RR in contact
+        error1 = (
+            jp.abs(contact_f[0] - 1.0)  # FL
+            + jp.abs(contact_f[1] - 0.0)  # RL
+            + jp.abs(contact_f[2] - 0.0)  # FR
+            + jp.abs(contact_f[3] - 1.0)  # RR
+        )
+        # Pattern 2: FR and RL in contact
+        error2 = (
+            jp.abs(contact_f[0] - 0.0)  # FL
+            + jp.abs(contact_f[1] - 1.0)  # RL
+            + jp.abs(contact_f[2] - 1.0)  # FR
+            + jp.abs(contact_f[3] - 0.0)  # RR
+        )
+        # Compute rewards for each pattern
+        reward1 = jp.exp(-error1 / self.reward_config.rewards.diagonal_contact_sigma)
+        reward2 = jp.exp(-error2 / self.reward_config.rewards.diagonal_contact_sigma)
+        # Take the maximum reward
+        reward = jp.maximum(reward1, reward2)
+        # Apply condition: remove reward if command norm < 0.05
+        command_speed = math.normalize(commands[:2])[1]
+        reward *= command_speed >= 0.05
+
+        return reward
 
     # ------------ reward functions----------------
     def _reward_lin_vel_z(self, xd: Motion) -> jax.Array:
@@ -582,7 +636,7 @@ class Go2Env(PipelineEnv):
         # TODO: check!!!
         pos = pipeline_state.site_xpos[self._feet_site_id]  # feet position
         z_pos = pos[:, 2]
-        #no_contact = ~contact_filt
+        # no_contact = ~contact_filt
         return jp.sum(z_pos)
 
     def _reward_two_feet_air(self, commands: jax.Array, contact_filt_cm: jax.Array):
@@ -604,6 +658,3 @@ class Go2Env(PipelineEnv):
     ) -> Sequence[np.ndarray]:
         camera = camera or "track"
         return super().render(trajectory, camera=camera, width=width, height=height)
-
-
-
